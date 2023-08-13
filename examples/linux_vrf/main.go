@@ -19,7 +19,7 @@ func main() {
 		Target:                  "192.168.1.1",
 		Port:                    161,
 		Version:                 g.Version2c,
-		Community:               "public",
+		ReadCommunity:           "public",
 		Timeout:                 time.Duration(30) * time.Second,
 		UseUnconnectedUDPSocket: false,
 		// Use a the Control function to bind the underlying socket

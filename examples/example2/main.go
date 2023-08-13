@@ -68,12 +68,12 @@ func main() {
 	// Build our own GoSNMP struct, rather than using g.Default.
 	// Do verbose logging of packets.
 	params := &g.GoSNMP{
-		Target:    envTarget,
-		Port:      uint16(port),
-		Community: "public",
-		Version:   g.Version2c,
-		Timeout:   time.Duration(2) * time.Second,
-		Logger:    g.NewLogger(log.New(os.Stdout, "", 0)),
+		Target:        envTarget,
+		Port:          uint16(port),
+		ReadCommunity: "public",
+		Version:       g.Version2c,
+		Timeout:       time.Duration(2) * time.Second,
+		Logger:        g.NewLogger(log.New(os.Stdout, "", 0)),
 	}
 	err := params.Connect()
 	if err != nil {

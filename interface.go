@@ -99,11 +99,23 @@ type Handler interface {
 	// SetPort sets the Port
 	SetPort(port uint16)
 
-	// Community gets the Community
+	// Community gets the v1 Community
 	Community() string
+
+	// ReadCommunity gets the v2 ReadCommunity
+	ReadCommunity() string
+
+	// WriteCommunity gets the v2 WriteCommunity
+	WriteCommunity() string
 
 	// SetCommunity sets the Community
 	SetCommunity(community string)
+
+	// SetReadCommunity sets the ReadCommunity
+	SetReadCommunity(community string)
+
+	// SetWriteCommunity sets the WriteCommunity
+	SetWriteCommunity(community string)
 
 	// Version gets the Version
 	Version() SnmpVersion
@@ -193,12 +205,13 @@ type snmpHandler struct {
 func NewHandler() Handler {
 	return &snmpHandler{
 		GoSNMP{
-			Port:      Default.Port,
-			Community: Default.Community,
-			Version:   Default.Version,
-			Timeout:   Default.Timeout,
-			Retries:   Default.Retries,
-			MaxOids:   Default.MaxOids,
+			Port:           Default.Port,
+			ReadCommunity:  Default.ReadCommunity,
+			WriteCommunity: Default.WriteCommunity,
+			Version:        Default.Version,
+			Timeout:        Default.Timeout,
+			Retries:        Default.Retries,
+			MaxOids:        Default.MaxOids,
 		},
 	}
 }
@@ -224,8 +237,24 @@ func (x *snmpHandler) Community() string {
 	return x.GoSNMP.Community
 }
 
+func (x *snmpHandler) ReadCommunity() string {
+	return x.GoSNMP.ReadCommunity
+}
+
+func (x *snmpHandler) WriteCommunity() string {
+	return x.GoSNMP.WriteCommunity
+}
+
 func (x *snmpHandler) SetCommunity(community string) {
 	x.GoSNMP.Community = community
+}
+
+func (x *snmpHandler) SetReadCommunity(community string) {
+	x.GoSNMP.ReadCommunity = community
+}
+
+func (x *snmpHandler) SetWriteCommunity(community string) {
+	x.GoSNMP.WriteCommunity = community
 }
 
 func (x *snmpHandler) Version() SnmpVersion {

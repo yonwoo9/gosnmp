@@ -17,6 +17,7 @@ func main() {
 	g.Default.Target = "127.0.0.1"
 	g.Default.Port = 162
 	g.Default.Version = g.Version1
+	g.Default.Community = "public"
 
 	err := g.Default.Connect()
 	if err != nil {

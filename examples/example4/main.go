@@ -6,10 +6,10 @@ package main
 
 import (
 	"fmt"
+	g "github.com/gosnmp/gosnmp"
 	"log"
 	"os"
 	"time"
-	g "github.com/gosnmp/gosnmp"
 )
 
 const (
@@ -19,12 +19,12 @@ const (
 
 func main() {
 	var Client = &g.GoSNMP{
-		Target:    "192.168.91.20",
-		Port:      161,
-		Community: "private",
-		Version:   g.Version2c,
-		Timeout:   time.Duration(2) * time.Second,
-		Logger:    g.NewLogger(log.New(os.Stdout, "", 0)),
+		Target:         "192.168.91.20",
+		Port:           161,
+		WriteCommunity: "private",
+		Version:        g.Version2c,
+		Timeout:        time.Duration(2) * time.Second,
+		Logger:         g.NewLogger(log.New(os.Stdout, "", 0)),
 	}
 	err := Client.Connect()
 	if err != nil {

@@ -57,8 +57,14 @@ type GoSNMP struct {
 	// Transport is the transport protocol to use ("udp" or "tcp"); if unset "udp" will be used.
 	Transport string
 
-	// Community is an SNMP Community string.
+	// Community is an SNMP V1 Community string.
 	Community string
+
+	// ReadCommunity is an SNMP V2 Read Community string for read-only access.
+	ReadCommunity string
+
+	// WriteCommunity is an SNMP V2 Write Community string for write access.
+	WriteCommunity string
 
 	// Version is an SNMP Version.
 	Version SnmpVersion
@@ -175,7 +181,8 @@ type GoSNMP struct {
 var Default = &GoSNMP{
 	Port:               161,
 	Transport:          udp,
-	Community:          "public",
+	ReadCommunity:      "public",
+	WriteCommunity:     "private",
 	Version:            Version2c,
 	Timeout:            time.Duration(2) * time.Second,
 	Retries:            3,
@@ -392,9 +399,20 @@ func (x *GoSNMP) mkSnmpPacket(pdutype PDUType, pdus []SnmpPDU, nonRepeaters uint
 	if x.SecurityParameters != nil {
 		newSecParams = x.SecurityParameters.Copy()
 	}
+	var Community string
+	switch x.Version {
+	case Version1:
+		Community = x.Community
+	case Version2c:
+		if pdutype == SetRequest {
+			Community = x.WriteCommunity
+		} else {
+			Community = x.ReadCommunity
+		}
+	}
 	return &SnmpPacket{
 		Version:            x.Version,
-		Community:          x.Community,
+		Community:          Community,
 		MsgFlags:           x.MsgFlags,
 		SecurityModel:      x.SecurityModel,
 		SecurityParameters: newSecParams,
@@ -495,12 +513,12 @@ func (x *GoSNMP) SnmpEncodePacket(pdutype PDUType, pdus []SnmpPDU, nonRepeaters 
 	pkt := x.mkSnmpPacket(pdutype, pdus, nonRepeaters, maxRepetitions)
 
 	// Request ID is an atomic counter that wraps to 0 at max int32.
-	reqID := (atomic.AddUint32(&(x.requestID), 1) & 0x7FFFFFFF)
+	reqID := atomic.AddUint32(&(x.requestID), 1) & 0x7FFFFFFF
 
 	pkt.RequestID = reqID
 
 	if x.Version == Version3 {
-		msgID := (atomic.AddUint32(&(x.msgID), 1) & 0x7FFFFFFF)
+		msgID := atomic.AddUint32(&(x.msgID), 1) & 0x7FFFFFFF
 
 		pkt.MsgID = msgID
 

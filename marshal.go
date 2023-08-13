@@ -233,13 +233,13 @@ func (x *GoSNMP) sendOneRequest(packetOut *SnmpPacket,
 		}
 
 		// Request ID is an atomic counter that wraps to 0 at max int32.
-		reqID := (atomic.AddUint32(&(x.requestID), 1) & 0x7FFFFFFF)
+		reqID := atomic.AddUint32(&(x.requestID), 1) & 0x7FFFFFFF
 		allReqIDs = append(allReqIDs, reqID)
 
 		packetOut.RequestID = reqID
 
 		if x.Version == Version3 {
-			msgID := (atomic.AddUint32(&(x.msgID), 1) & 0x7FFFFFFF)
+			msgID := atomic.AddUint32(&(x.msgID), 1) & 0x7FFFFFFF
 
 			// allMsgIDs = append(allMsgIDs, msgID) // unused
 
@@ -1079,7 +1079,7 @@ func (x *GoSNMP) unmarshalPayload(packet []byte, cursor int, response *SnmpPacke
 			return fmt.Errorf("error in unmarshalResponse: %w", err)
 		}
 		// If it's an InformRequest, mark the trap.
-		response.IsInform = (requestType == InformRequest)
+		response.IsInform = requestType == InformRequest
 	case Trap:
 		response.PDUType = requestType
 		if err := x.unmarshalTrapV1(packet[cursor:], response); err != nil {

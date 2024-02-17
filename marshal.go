@@ -608,8 +608,7 @@ func (packet *SnmpPacket) marshalPDU() ([]byte, error) {
 	switch packet.PDUType {
 	case GetBulkRequest:
 		// requestid
-		buf.Write([]byte{2, 4})
-		err := binary.Write(buf, binary.BigEndian, packet.RequestID)
+		err := shrinkAndWriteUint(buf, int(packet.RequestID))
 		if err != nil {
 			return nil, err
 		}
@@ -647,10 +646,9 @@ func (packet *SnmpPacket) marshalPDU() ([]byte, error) {
 
 	default:
 		// requestid
-		buf.Write([]byte{2, 4})
-		err := binary.Write(buf, binary.BigEndian, packet.RequestID)
+		err := shrinkAndWriteUint(buf, int(packet.RequestID))
 		if err != nil {
-			return nil, fmt.Errorf("unable to marshal OID: %w", err)
+			return nil, err
 		}
 
 		// error status
@@ -941,17 +939,10 @@ func marshalVarbind(pdu *SnmpPDU) ([]byte, error) {
 		pduBuf.Write(tmpBuf.Bytes())
 
 	case Counter64:
-		converters := map[Asn1BER]func(interface{}) ([]byte, error){
-			Counter64: marshalUint64,
-		}
 		tmpBuf.Write([]byte{byte(ObjectIdentifier), byte(len(oid))})
 		tmpBuf.Write(oid)
 		tmpBuf.WriteByte(byte(pdu.Type))
-		intBytes, err := converters[pdu.Type](pdu.Value)
-		if err != nil {
-			return nil, fmt.Errorf("error converting PDU value type %v to %v: %w", pdu.Value, pdu.Type, err)
-		}
-
+		intBytes := marshalUint64(pdu.Value)
 		tmpBuf.WriteByte(byte(len(intBytes)))
 		tmpBuf.Write(intBytes)
 		tmpBytes := tmpBuf.Bytes()
@@ -988,12 +979,12 @@ func marshalVarbind(pdu *SnmpPDU) ([]byte, error) {
 
 // -- Unmarshalling Logic ------------------------------------------------------
 
-func (x *GoSNMP) unmarshalHeader(packet []byte, response *SnmpPacket) (int, error) {
+func (x *GoSNMP) unmarshalVersionFromHeader(packet []byte, response *SnmpPacket) (SnmpVersion, int, error) {
 	if len(packet) < 2 {
-		return 0, fmt.Errorf("cannot unmarshal empty packet")
+		return 0, 0, fmt.Errorf("cannot unmarshal empty packet")
 	}
 	if response == nil {
-		return 0, fmt.Errorf("cannot unmarshal response into nil packet reference")
+		return 0, 0, fmt.Errorf("cannot unmarshal response into nil packet reference")
 	}
 
 	response.Variables = make([]SnmpPDU, 0, 5)
@@ -1003,33 +994,42 @@ func (x *GoSNMP) unmarshalHeader(packet []byte, response *SnmpPacket) (int, erro
 
 	// First bytes should be 0x30
 	if PDUType(packet[0]) != Sequence {
-		return 0, fmt.Errorf("invalid packet header")
+		return 0, 0, fmt.Errorf("invalid packet header")
 	}
 
 	length, cursor, err := parseLength(packet)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if len(packet) != length {
-		return 0, fmt.Errorf("error verifying packet sanity: Got %d Expected: %d", len(packet), length)
+		return 0, 0, fmt.Errorf("error verifying packet sanity: Got %d Expected: %d", len(packet), length)
 	}
 	x.Logger.Printf("Packet sanity verified, we got all the bytes (%d)", length)
 
 	// Parse SNMP Version
 	rawVersion, count, err := parseRawField(x.Logger, packet[cursor:], "version")
 	if err != nil {
-		return 0, fmt.Errorf("error parsing SNMP packet version: %w", err)
+		return 0, 0, fmt.Errorf("error parsing SNMP packet version: %w", err)
 	}
 
 	cursor += count
-	if cursor > len(packet) {
-		return 0, fmt.Errorf("error parsing SNMP packet, packet length %d cursor %d", len(packet), cursor)
+	if cursor >= len(packet) {
+		return 0, 0, fmt.Errorf("error parsing SNMP packet, packet length %d cursor %d", len(packet), cursor)
 	}
 
 	if version, ok := rawVersion.(int); ok {
-		response.Version = SnmpVersion(version)
 		x.Logger.Printf("Parsed version %d", version)
+		return SnmpVersion(version), cursor, nil
 	}
+	return 0, cursor, err
+}
+
+func (x *GoSNMP) unmarshalHeader(packet []byte, response *SnmpPacket) (int, error) {
+	version, cursor, err := x.unmarshalVersionFromHeader(packet, response)
+	if err != nil {
+		return 0, err
+	}
+	response.Version = version
 
 	if response.Version == Version3 {
 		oldcursor := cursor
@@ -1378,4 +1378,13 @@ func (x *GoSNMP) receive() ([]byte, error) {
 	resp := make([]byte, n)
 	copy(resp, x.rxBuf[:n])
 	return resp, nil
+}
+
+func shrinkAndWriteUint(buf io.Writer, in int) error {
+	out, err := asn1.Marshal(in)
+	if err != nil {
+		return err
+	}
+	_, err = buf.Write(out)
+	return err
 }

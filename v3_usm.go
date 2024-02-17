@@ -154,6 +154,18 @@ type UsmSecurityParameters struct {
 	Logger Logger
 }
 
+func (sp *UsmSecurityParameters) getIdentifier() string {
+	return sp.UserName
+}
+
+func (sp *UsmSecurityParameters) getLogger() Logger {
+	return sp.Logger
+}
+
+func (sp *UsmSecurityParameters) setLogger(log Logger) {
+	sp.Logger = log
+}
+
 // Description logs authentication paramater information to the provided GoSNMP Logger
 func (sp *UsmSecurityParameters) Description() string {
 	var sb strings.Builder
@@ -252,7 +264,9 @@ func (sp *UsmSecurityParameters) Copy() SnmpV3SecurityParameters {
 func (sp *UsmSecurityParameters) getDefaultContextEngineID() string {
 	return sp.AuthoritativeEngineID
 }
-func (sp *UsmSecurityParameters) initSecurityKeys() error {
+
+// InitSecurityKeys initializes the Priv and Auth keys if needed
+func (sp *UsmSecurityParameters) InitSecurityKeys() error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 
@@ -393,7 +407,22 @@ func castUsmSecParams(secParams SnmpV3SecurityParameters) (*UsmSecurityParameter
 var (
 	passwordKeyHashCache = make(map[string][]byte) //nolint:gochecknoglobals
 	passwordKeyHashMutex sync.RWMutex              //nolint:gochecknoglobals
+	passwordCacheDisable atomic.Bool               //nolint:gochecknoglobals
 )
+
+// PasswordCaching is enabled by default for performance reason. If the cache was disabled then
+// re-enabled, the cache is reset.
+func PasswordCaching(enable bool) {
+	oldCacheEnable := !passwordCacheDisable.Load()
+	passwordKeyHashMutex.Lock()
+	if !enable { // if off
+		passwordKeyHashCache = nil
+	} else if !oldCacheEnable && enable { // if off then on
+		passwordKeyHashCache = make(map[string][]byte)
+	}
+	passwordCacheDisable.Store(!enable)
+	passwordKeyHashMutex.Unlock()
+}
 
 func hashPassword(hash hash.Hash, password string) ([]byte, error) {
 	if len(password) == 0 {
@@ -416,12 +445,15 @@ func hashPassword(hash hash.Hash, password string) ([]byte, error) {
 
 // Common passwordToKey algorithm, "caches" the result to avoid extra computation each reuse
 func cachedPasswordToKey(hash hash.Hash, cacheKey string, password string) ([]byte, error) {
-	passwordKeyHashMutex.RLock()
-	value := passwordKeyHashCache[cacheKey]
-	passwordKeyHashMutex.RUnlock()
+	cacheDisable := passwordCacheDisable.Load()
+	if !cacheDisable {
+		passwordKeyHashMutex.RLock()
+		value := passwordKeyHashCache[cacheKey]
+		passwordKeyHashMutex.RUnlock()
 
-	if value != nil {
-		return value, nil
+		if value != nil {
+			return value, nil
+		}
 	}
 
 	hashed, err := hashPassword(hash, password)
@@ -429,9 +461,11 @@ func cachedPasswordToKey(hash hash.Hash, cacheKey string, password string) ([]by
 		return nil, err
 	}
 
-	passwordKeyHashMutex.Lock()
-	passwordKeyHashCache[cacheKey] = hashed
-	passwordKeyHashMutex.Unlock()
+	if !cacheDisable {
+		passwordKeyHashMutex.Lock()
+		passwordKeyHashCache[cacheKey] = hashed
+		passwordKeyHashMutex.Unlock()
+	}
 
 	return hashed, nil
 }
@@ -463,6 +497,9 @@ func hMAC(hash crypto.Hash, cacheKey string, password string, engineID string) (
 }
 
 func cacheKey(authProtocol SnmpV3AuthProtocol, passphrase string) string {
+	if passwordCacheDisable.Load() {
+		return ""
+	}
 	var cacheKey = make([]byte, 1+len(passphrase))
 	cacheKey = append(cacheKey, 'h'+byte(authProtocol))
 	cacheKey = append(cacheKey, []byte(passphrase)...)
@@ -601,7 +638,8 @@ func (sp *UsmSecurityParameters) usmSetSalt(newSalt interface{}) error {
 	return nil
 }
 
-func (sp *UsmSecurityParameters) initPacket(packet *SnmpPacket) error {
+// InitPacket ensures the enc salt is incremented for packets marked for AuthPriv
+func (sp *UsmSecurityParameters) InitPacket(packet *SnmpPacket) error {
 	// http://tools.ietf.org/html/rfc2574#section-8.1.1.1
 	// localDESSalt needs to be incremented on every packet.
 	newSalt := sp.usmAllocateNewSalt()
@@ -786,7 +824,7 @@ func (sp *UsmSecurityParameters) encryptPacket(scopedPdu []byte) ([]byte, error)
 		}
 		b = append([]byte{byte(OctetString)}, pduLen...)
 		scopedPdu = append(b, ciphertext...) //nolint:gocritic
-	default:
+	case DES:
 		preiv := sp.PrivacyKey[8:]
 		var iv [8]byte
 		for i := 0; i < len(iv); i++ {
@@ -840,7 +878,7 @@ func (sp *UsmSecurityParameters) decryptPacket(packet []byte, cursor int) ([]byt
 		stream.XORKeyStream(plaintext, packet[cursorTmp:])
 		copy(packet[cursor:], plaintext)
 		packet = packet[:cursor+len(plaintext)]
-	default:
+	case DES:
 		if len(packet[cursorTmp:])%des.BlockSize != 0 {
 			return nil, errors.New("error decrypting ScopedPDU: not multiple of des block size")
 		}
@@ -926,6 +964,10 @@ func (sp *UsmSecurityParameters) marshal(flags SnmpV3MsgFlags) ([]byte, error) {
 
 func (sp *UsmSecurityParameters) unmarshal(flags SnmpV3MsgFlags, packet []byte, cursor int) (int, error) {
 	var err error
+
+	if cursor >= len(packet) {
+		return 0, errors.New("error parsing SNMPV3 User Security Model parameters: end of packet")
+	}
 
 	if PDUType(packet[cursor]) != Sequence {
 		return 0, errors.New("error parsing SNMPV3 User Security Model parameters")

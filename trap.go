@@ -119,6 +119,9 @@ type TrapListener struct {
 	// OnNewTrap handles incoming Trap and Inform PDUs.
 	OnNewTrap TrapHandlerFunc
 
+	// CloseTimeout is the max wait time for the socket to gracefully signal its closure.
+	CloseTimeout time.Duration
+
 	// These unexported fields are for letting test cases
 	// know we are ready.
 	conn  *net.UDPConn
@@ -129,6 +132,9 @@ type TrapListener struct {
 
 	finish int32 // Atomic flag; set to 1 when closing connection
 }
+
+// Default timeout value for CloseTimeout of 3 seconds
+const defaultCloseTimeout = 3 * time.Second
 
 // TrapHandlerFunc is a callback function type which receives SNMP Trap and
 // Inform packets when they are received.  If this callback is null, Trap and
@@ -149,10 +155,10 @@ type TrapHandlerFunc func(s *SnmpPacket, u *net.UDPAddr)
 // NOTE: the trap code is currently unreliable when working with snmpv3 - pull requests welcome
 func NewTrapListener() *TrapListener {
 	tl := &TrapListener{
-		finish: 0,
-		done:   make(chan bool),
-		// Buffered because one doesn't have to block on it.
-		listening: make(chan bool, 1),
+		finish:       0,
+		done:         make(chan bool),
+		listening:    make(chan bool, 1), // Buffered because one doesn't have to block on it.
+		CloseTimeout: defaultCloseTimeout,
 	}
 
 	return tl
@@ -169,19 +175,24 @@ func (t *TrapListener) Listening() <-chan bool {
 }
 
 // Close terminates the listening on TrapListener socket
-//
-// NOTE: the trap code is currently unreliable when working with snmpv3 - pull requests welcome
 func (t *TrapListener) Close() {
-	// Prevent concurrent calls to Close
 	if atomic.CompareAndSwapInt32(&t.finish, 0, 1) {
-		// TODO there's bugs here
+		t.Lock()
+		defer t.Unlock()
+
 		if t.conn == nil {
 			return
 		}
-		if t.conn.LocalAddr().Network() == udp {
-			t.conn.Close()
+
+		if err := t.conn.Close(); err != nil {
+			t.Params.Logger.Printf("failed to Close() the TrapListener socket: %s", err)
 		}
-		<-t.done
+
+		select {
+		case <-t.done:
+		case <-time.After(t.CloseTimeout): // A timeout can prevent blocking forever
+			t.Params.Logger.Printf("timeout while awaiting done signal on TrapListener Close()")
+		}
 	}
 }
 
@@ -430,17 +441,61 @@ func (t *TrapListener) debugTrapHandler(s *SnmpPacket, u *net.UDPAddr) {
 }
 
 // UnmarshalTrap unpacks the SNMP Trap.
-//
-// NOTE: the trap code is currently unreliable when working with snmpv3 - pull requests welcome
 func (x *GoSNMP) UnmarshalTrap(trap []byte, useResponseSecurityParameters bool) (result *SnmpPacket, err error) {
-	result = new(SnmpPacket)
+	// Get only the version from the header of the trap
+	version, _, err := x.unmarshalVersionFromHeader(trap, new(SnmpPacket))
+	if err != nil {
+		x.Logger.Printf("UnmarshalTrap version unmarshal: %s\n", err)
+		return nil, err
+	}
+	// If there are multiple users configured and the SNMP trap is v3, see which user has valid credentials
+	// by iterating through the list matching the identifier and seeing which credentials are authentic / can be used to decrypt
+	if x.TrapSecurityParametersTable != nil && version == Version3 {
+		identifier, err := x.getTrapIdentifier(trap)
+		if err != nil {
+			x.Logger.Printf("UnmarshalTrap V3 get trap identifier: %s\n", err)
+			return nil, err
+		}
+		secParamsList, err := x.TrapSecurityParametersTable.Get(identifier)
+		if err != nil {
+			x.Logger.Printf("UnmarshalTrap V3 get security parameters from table: %s\n", err)
+			return nil, err
+		}
+		for _, secParams := range secParamsList {
+			// Copy the trap and pass the security parameters to try to unmarshal with
+			cpTrap := make([]byte, len(trap))
+			copy(cpTrap, trap)
+			if result, err = x.unmarshalTrapBase(cpTrap, secParams.Copy(), true); err == nil {
+				return result, nil
+			}
+		}
+		return nil, fmt.Errorf("no credentials successfully unmarshaled trap: %w", err)
+	}
+	return x.unmarshalTrapBase(trap, nil, useResponseSecurityParameters)
+}
 
-	if x.SecurityParameters != nil {
-		err = x.SecurityParameters.initSecurityKeys()
+func (x *GoSNMP) getTrapIdentifier(trap []byte) (string, error) {
+	// Initialize a packet with no auth/priv to unmarshal ID/key for security parameters to use
+	packet := new(SnmpPacket)
+	_, err := x.unmarshalHeader(trap, packet)
+	// Return err if no identifier was able to be parsed after unmarshaling
+	if err != nil && packet.SecurityParameters.getIdentifier() == "" {
+		return "", err
+	}
+	return packet.SecurityParameters.getIdentifier(), nil
+}
+
+func (x *GoSNMP) unmarshalTrapBase(trap []byte, sp SnmpV3SecurityParameters, useResponseSecurityParameters bool) (*SnmpPacket, error) {
+	result := new(SnmpPacket)
+
+	if x.SecurityParameters != nil && sp == nil {
+		err := x.SecurityParameters.InitSecurityKeys()
 		if err != nil {
 			return nil, err
 		}
 		result.SecurityParameters = x.SecurityParameters.Copy()
+	} else {
+		result.SecurityParameters = sp
 	}
 
 	cursor, err := x.unmarshalHeader(trap, result)

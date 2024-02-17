@@ -4,7 +4,7 @@ version: 2.1
 executors:
   golang:
     docker:
-    - image: cimg/go:1.20
+    - image: cimg/go:1.21
 
 jobs:
   generate:
@@ -22,6 +22,12 @@ jobs:
     - checkout
     - run: make tools
     - run: make lint
+
+  fuzz:
+    executor: golang
+    steps:
+    - checkout
+    - run: go test -fuzztime 60s -v -tags marshal -fuzz '^FuzzUnmarshal$'
 
   test:
     parameters:
@@ -66,6 +72,7 @@ workflows:
     jobs:
     - generate
     - lint
+    - fuzz
     - test:
         matrix:
           parameters:
@@ -73,7 +80,5 @@ workflows:
             - "amd64"
             - "386"
             goversion:
-            - "1.17"
-            - "1.18"
-            - "1.19"
             - "1.20"
+            - "1.21"

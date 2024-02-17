@@ -162,6 +162,10 @@ type GoSNMP struct {
 	// SecurityParameters is an SNMPV3 Security Model parameters struct.
 	SecurityParameters SnmpV3SecurityParameters
 
+	// TrapSecurityParametersTable is a mapping of identifiers to corresponding SNMP V3 Security Model parameters
+	// right now only supported for receiving traps, variable name to make that clear
+	TrapSecurityParametersTable *SnmpV3SecurityParametersTable
+
 	// ContextEngineID is SNMPV3 ContextEngineID in ScopedPDU.
 	ContextEngineID string
 
@@ -394,6 +398,10 @@ func (x *GoSNMP) validateParameters() error {
 	return nil
 }
 
+func (x *GoSNMP) MkSnmpPacket(pdutype PDUType, pdus []SnmpPDU, nonRepeaters uint8, maxRepetitions uint32) *SnmpPacket {
+	return x.mkSnmpPacket(pdutype, pdus, nonRepeaters, maxRepetitions)
+}
+
 func (x *GoSNMP) mkSnmpPacket(pdutype PDUType, pdus []SnmpPDU, nonRepeaters uint8, maxRepetitions uint32) *SnmpPacket {
 	var newSecParams SnmpV3SecurityParameters
 	if x.SecurityParameters != nil {
@@ -449,10 +457,10 @@ func (x *GoSNMP) Set(pdus []SnmpPDU) (result *SnmpPacket, err error) {
 	var packetOut *SnmpPacket
 	switch pdus[0].Type {
 	// TODO test Gauge32
-	case Integer, OctetString, Gauge32, IPAddress, ObjectIdentifier:
+	case Integer, OctetString, Gauge32, IPAddress, ObjectIdentifier, Counter32, Counter64, Null, TimeTicks, Uinteger32, OpaqueFloat, OpaqueDouble:
 		packetOut = x.mkSnmpPacket(SetRequest, pdus, 0, 0)
 	default:
-		return nil, fmt.Errorf("ERR:gosnmp currently only supports SNMP SETs for Integers, IPAddress and OctetStrings")
+		return nil, fmt.Errorf("ERR:gosnmp currently only supports SNMP SETs for Integer, OctetString, Gauge32, IPAddress, ObjectIdentifier, Counter32, Counter64, Null, TimeTicks, Uinteger32, OpaqueFloat, and OpaqueDouble. Not %s", pdus[0].Type)
 	}
 	return x.send(packetOut, true)
 }
